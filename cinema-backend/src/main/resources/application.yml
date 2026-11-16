@@ -14,14 +14,14 @@ spring:
     username: ${CINEMA_DB_USERNAME:root}
     # 密码不落盘, 启动前设置环境变量 CINEMA_DB_PASSWORD(或 --spring.datasource.password=...)
     password: ${CINEMA_DB_PASSWORD:147258}
-  # Redis: 缓存热点排片与电影列表(当前本机 Redis 未启动, 代码已做降级, 缺失时自动回源数据库)
+  # Redis: 本地单机, 既用于缓存热点排片/电影列表, 也用于 Redisson 座位分布式锁
   data:
     redis:
-      host: 127.0.0.1
+      host: localhost
       port: 6379
       database: 0
-      timeout: 800ms
-      connect-timeout: 800ms
+      timeout: 3000ms
+      connect-timeout: 3000ms
   cache:
     type: none
   jackson:

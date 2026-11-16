@@ -1,6 +1,7 @@
 # --- 标准忽略项（自动生成/补齐）---
 /target/
 /.idea/
+**/.idea/
 *.class
 *.jar
 *.log

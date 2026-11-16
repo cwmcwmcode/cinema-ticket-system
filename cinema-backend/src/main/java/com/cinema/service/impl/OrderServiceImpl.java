@@ -13,9 +13,10 @@ import com.cinema.mapper.OrderMapper;
 import com.cinema.mapper.ScheduleMapper;
 import com.cinema.mapper.SysUserMapper;
 import com.cinema.service.OrderService;
+import com.cinema.service.SeatLockService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -41,22 +42,45 @@ public class OrderServiceImpl implements OrderService {
     private final MovieMapper movieMapper;
     private final HallMapper hallMapper;
     private final SysUserMapper userMapper;
+    private final SeatLockService seatLockService;
+    private final TransactionTemplate transactionTemplate;
 
+    /**
+     * 选座下单: 先抢 Redis 座位锁, 抢不到直接返回, 不触碰数据库; 抢到后再进 MySQL 事务检查并落单。
+     * 这里不加 @Transactional, 否则事务会在加锁前开启, 锁便失去串行意义。
+     */
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public Order create(OrderCreateDTO dto) {
-        if (dto.getUserId() == null || userMapper.selectById(dto.getUserId()) == null) {
+        if (dto.getUserId() == null) {
             throw new BusinessException("用户不存在");
         }
         if (dto.getScheduleId() == null) {
             throw new BusinessException("场次不能为空");
         }
-        if (dto.getSeats() == null || dto.getSeats().isEmpty()) {
-            throw new BusinessException("请选择座位");
+        // 座位格式为纯字符串校验, 不查库
+        List<String> seats = normalizeSeats(dto.getSeats());
+
+        // 1. 锁座前置: 锁键 lock:seat:{scheduleId}:{seat}, 等待 0 秒, 租期 10 分钟
+        String conflict = seatLockService.lockSeats(dto.getScheduleId(), seats);
+        if (conflict != null) {
+            throw new BusinessException("该座位已被锁定或抢购");
         }
 
-        // 对场次行加锁, 保证同一场次选座串行, 避免超卖
-        Schedule schedule = scheduleMapper.selectByIdForUpdate(dto.getScheduleId());
+        // 2. 锁定成功后才开启数据库事务: 校验场次/座位并生成订单
+        try {
+            return transactionTemplate.execute(status -> doCreate(dto, seats));
+        } catch (RuntimeException e) {
+            // 落单失败立即释放锁, 避免座位被无效占用到租期结束
+            seatLockService.unlockSeats(dto.getScheduleId(), String.join(",", seats));
+            throw e;
+        }
+    }
+
+    private Order doCreate(OrderCreateDTO dto, List<String> seats) {
+        if (userMapper.selectById(dto.getUserId()) == null) {
+            throw new BusinessException("用户不存在");
+        }
+        Schedule schedule = scheduleMapper.selectById(dto.getScheduleId());
         if (schedule == null) {
             throw new BusinessException("场次不存在");
         }
@@ -65,14 +89,6 @@ public class OrderServiceImpl implements OrderService {
             throw new BusinessException("影厅不存在");
         }
 
-        List<String> seats = dto.getSeats().stream()
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .distinct()
-                .toList();
-        if (seats.isEmpty()) {
-            throw new BusinessException("请选择座位");
-        }
         for (String seat : seats) {
             Matcher m = SEAT_PATTERN.matcher(seat);
             if (!m.matches()) {
@@ -104,6 +120,28 @@ public class OrderServiceImpl implements OrderService {
         return fill(order);
     }
 
+    private List<String> normalizeSeats(List<String> rawSeats) {
+        if (rawSeats == null || rawSeats.isEmpty()) {
+            throw new BusinessException("请选择座位");
+        }
+        // 排序后再加锁, 保证同一批座位在多请求间加锁顺序一致
+        List<String> seats = rawSeats.stream()
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .distinct()
+                .sorted()
+                .toList();
+        if (seats.isEmpty()) {
+            throw new BusinessException("请选择座位");
+        }
+        for (String seat : seats) {
+            if (!SEAT_PATTERN.matcher(seat).matches()) {
+                throw new BusinessException("座位格式错误: " + seat + ", 应为 1排2座");
+            }
+        }
+        return seats;
+    }
+
     @Override
     public List<Order> listByUser(Long userId) {
         List<Order> list = orderMapper.selectList(Wrappers.<Order>lambdaQuery()
@@ -128,11 +166,15 @@ public class OrderServiceImpl implements OrderService {
         if (order == null) {
             throw new BusinessException("订单不存在");
         }
-        if (order.getStatus() != 0) {
+        // 条件更新, 避免支付与超时关单并发时覆盖状态
+        int rows = orderMapper.update(null, Wrappers.<Order>lambdaUpdate()
+                .eq(Order::getId, id)
+                .eq(Order::getStatus, 0)
+                .set(Order::getStatus, 1));
+        if (rows == 0) {
             throw new BusinessException("订单状态不允许支付");
         }
         order.setStatus(1);
-        orderMapper.updateById(order);
         return fill(order);
     }
 
@@ -142,11 +184,16 @@ public class OrderServiceImpl implements OrderService {
         if (order == null) {
             throw new BusinessException("订单不存在");
         }
-        if (order.getStatus() != 0) {
+        int rows = orderMapper.update(null, Wrappers.<Order>lambdaUpdate()
+                .eq(Order::getId, id)
+                .eq(Order::getStatus, 0)
+                .set(Order::getStatus, 2));
+        if (rows == 0) {
             throw new BusinessException("仅未支付订单可取消");
         }
         order.setStatus(2);
-        orderMapper.updateById(order);
+        // 取消后立即放座, 不必等锁租期结束
+        seatLockService.unlockSeats(order.getScheduleId(), order.getSeats());
         return fill(order);
     }
 

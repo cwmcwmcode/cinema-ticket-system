@@ -16,6 +16,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -26,6 +28,7 @@ import java.util.stream.Collectors;
 public class ScheduleServiceImpl implements ScheduleService {
 
     private static final String CACHE_PREFIX = "schedule:";
+    private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     private final ScheduleMapper scheduleMapper;
     private final MovieMapper movieMapper;
@@ -90,6 +93,8 @@ public class ScheduleServiceImpl implements ScheduleService {
         if (schedule.getPrice() == null) {
             schedule.setPrice(movie.getPrice() == null ? BigDecimal.ZERO : movie.getPrice());
         }
+        // 同影厅排片时间不可重叠
+        checkTimeCollision(schedule.getHallId(), schedule.getStartTime(), schedule.getEndTime(), null);
         scheduleMapper.insert(schedule);
         cacheService.deleteByPrefix(CACHE_PREFIX);
         return schedule;
@@ -116,6 +121,8 @@ public class ScheduleServiceImpl implements ScheduleService {
             int duration = movie == null || movie.getDuration() == null ? 0 : movie.getDuration();
             schedule.setEndTime(schedule.getStartTime().plusMinutes(duration));
         }
+        // 调整后的排片同样不允许与同影厅其它场次重叠
+        checkTimeCollision(schedule.getHallId(), schedule.getStartTime(), schedule.getEndTime(), id);
         scheduleMapper.updateById(schedule);
         cacheService.deleteByPrefix(CACHE_PREFIX);
         return getById(id);
@@ -128,6 +135,23 @@ public class ScheduleServiceImpl implements ScheduleService {
         }
         scheduleMapper.deleteById(id);
         cacheService.deleteByPrefix(CACHE_PREFIX);
+    }
+
+    /**
+     * 排片时间碰撞检测: 同影厅下 (startTime < 已有散场) 且 (endTime > 已有开场) 即视为重叠。
+     * 仅做普通查询, 不依赖 RR 快照读即可拦截绝大多数冲突。
+     */
+    private void checkTimeCollision(Long hallId, LocalDateTime startTime, LocalDateTime endTime, Long excludeId) {
+        List<Schedule> conflicts = scheduleMapper.selectList(Wrappers.<Schedule>lambdaQuery()
+                .eq(Schedule::getHallId, hallId)
+                .ne(excludeId != null, Schedule::getId, excludeId)
+                .lt(Schedule::getStartTime, endTime)
+                .gt(Schedule::getEndTime, startTime));
+        if (!conflicts.isEmpty()) {
+            Schedule exist = conflicts.get(0);
+            throw new BusinessException("该影厅排片时间冲突: 已有 "
+                    + exist.getStartTime().format(TIME_FMT) + " ~ " + exist.getEndTime().format(TIME_FMT) + " 的场次");
+        }
     }
 
     /**
