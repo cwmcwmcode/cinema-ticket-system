@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>星光影院 · 在线选座购票</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.8.8/dist/index.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.8.8/theme-chalk/dark/css-vars.css">
+    <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+<div id="app" v-cloak>
+    <header class="navbar">
+        <div class="brand">
+            <span class="logo">影</span>
+            <div>星光影院<small>CINEMA · X</small></div>
+        </div>
+        <nav class="nav-links">
+            <a href="index.html" class="active">首页</a>
+            <a href="orders.html">我的订单</a>
+            <a href="admin.html">管理后台</a>
+        </nav>
+        <div class="nav-right">
+            <template v-if="user">
+                <div class="user-chip">
+                    <span class="avatar">{{ user.username.slice(0, 1).toUpperCase() }}</span>
+                    <span>{{ user.username }}</span>
+                    <el-tag size="small" :type="user.role === 1 ? 'danger' : 'info'" effect="dark">
+                        {{ user.role === 1 ? '管理员' : '会员' }}
+                    </el-tag>
+                </div>
+                <el-button size="small" plain @click="logout">退出</el-button>
+            </template>
+            <el-button v-else type="primary" size="small" round @click="loginVisible = true">登录 / 注册</el-button>
+        </div>
+    </header>
+
+    <main class="page">
+        <section class="hero">
+            <span class="tag">IMAX · 杜比全景声 · 在线选座</span>
+            <h1>今晚, 把故事<br>放进大银幕</h1>
+            <p>热映影片实时排片, 可视化座位图自由选座, 下单即锁座, 扫码取票进场。现在就挑一场喜欢的电影吧。</p>
+            <div class="hero-actions">
+                <el-button type="primary" size="large" round @click="scrollToMovies">立即选座购票</el-button>
+                <el-button size="large" round plain @click="goOrders">查看我的订单</el-button>
+            </div>
+        </section>
+
+        <div class="section-head">
+            <h2>正在热映</h2>
+            <span class="sub">共 {{ movies.length }} 部影片 · 点击影片查看场次</span>
+            <div class="toolbar">
+                <el-input v-model="keyword" placeholder="搜索片名 / 导演 / 演员" clearable style="width: 240px">
+                    <template #prefix><span style="opacity:.6">🔍</span></template>
+                </el-input>
+                <el-button plain :loading="loading" @click="loadMovies">刷新</el-button>
+            </div>
+        </div>
+
+        <div v-if="loading" style="padding: 40px 0;">
+            <el-skeleton :rows="5" animated></el-skeleton>
+        </div>
+        <div v-else-if="filteredMovies.length === 0" class="empty-box">
+            <div class="big">🎬</div>
+            <div>暂无匹配影片, 换个关键词试试</div>
+        </div>
+        <div v-else class="movie-grid">
+            <article class="movie-card" v-for="m in filteredMovies" :key="m.id" @click="openSchedules(m)">
+                <div class="poster">
+                    <img :src="m.coverUrl" :alt="m.title" @error="onImgError">
+                    <span class="rating">{{ rating(m.id) }}</span>
+                    <span class="hot-badge">热映</span>
+                </div>
+                <div class="card-body">
+                    <h3>{{ m.title }}</h3>
+                    <p class="meta">{{ m.director || '未知导演' }} · {{ m.actors || '主演待定' }}</p>
+                    <p class="meta small">{{ m.duration }} 分钟 · {{ m.releaseDate || '即将上映' }}</p>
+                    <div class="card-foot">
+                        <span class="price">{{ money(m.price) }}<small>起</small></span>
+                        <el-button type="primary" size="small" round>选座购票</el-button>
+                    </div>
+                </div>
+            </article>
+        </div>
+    </main>
+
+    <!-- 场次选择 -->
+    <el-dialog v-model="dialogVisible" width="680px" :title="currentMovie ? currentMovie.title + ' · 全部场次' : '场次'">
+        <div v-if="currentMovie" class="movie-mini">
+            <img :src="currentMovie.coverUrl" :alt="currentMovie.title" @error="onImgError">
+            <div>
+                <h3>{{ currentMovie.title }}</h3>
+                <p>{{ currentMovie.duration }} 分钟 · {{ currentMovie.releaseDate }}</p>
+                <p>{{ currentMovie.director }} / {{ currentMovie.actors }}</p>
+            </div>
+        </div>
+        <div v-if="schedulesLoading" style="padding: 20px 0;"><el-skeleton :rows="3" animated/></div>
+        <div v-else-if="schedules.length === 0" class="empty-box" style="padding: 34px 0;">
+            <div class="big">🗓</div>
+            <div>该影片暂未排片, 请稍后再来</div>
+        </div>
+        <div v-else class="schedule-list">
+            <div class="schedule-item" v-for="s in schedules" :key="s.id">
+                <div class="schedule-time">
+                    {{ clockOf(s.startTime) }}
+                    <span>{{ dayOf(s.startTime) }}</span>
+                </div>
+                <div class="schedule-info">
+                    <div class="hall">{{ s.hallName }} · {{ s.rowCount }}排{{ s.colCount }}列</div>
+                    <div class="end">散场 {{ clockOf(s.endTime) }} · 票价 {{ money(s.price) }}</div>
+                </div>
+                <el-button type="primary" round @click="goSeat(s)">去选座</el-button>
+            </div>
+        </div>
+    </el-dialog>
+
+    <!-- 登录 / 注册 -->
+    <el-dialog v-model="loginVisible" width="420px" :show-close="true">
+        <el-tabs v-model="loginTab">
+            <el-tab-pane label="登录" name="login">
+                <el-form label-position="top" @submit.prevent>
+                    <el-form-item label="用户名">
+                        <el-input v-model="loginForm.username" placeholder="请输入用户名" size="large"></el-input>
+                    </el-form-item>
+                    <el-form-item label="密码">
+                        <el-input v-model="loginForm.password" type="password" show-password placeholder="请输入密码"
+                                  size="large" @keyup.enter="doLogin"></el-input>
+                    </el-form-item>
+                </el-form>
+                <el-button type="primary" size="large" style="width:100%" :loading="loginLoading" @click="doLogin">
+                    登录
+                </el-button>
+                <p class="form-tip" style="margin-top:14px">演示账号: admin / 123456(管理员) · user / 123456(普通用户)</p>
+            </el-tab-pane>
+            <el-tab-pane label="注册" name="register">
+                <el-form label-position="top" @submit.prevent>
+                    <el-form-item label="用户名">
+                        <el-input v-model="registerForm.username" placeholder="3-20 位字符" size="large"></el-input>
+                    </el-form-item>
+                    <el-form-item label="密码">
+                        <el-input v-model="registerForm.password" type="password" show-password placeholder="至少 6 位"
+                                  size="large"></el-input>
+                    </el-form-item>
+                    <el-form-item label="手机号">
+                        <el-input v-model="registerForm.phone" placeholder="选填" size="large"></el-input>
+                    </el-form-item>
+                </el-form>
+                <el-button type="primary" size="large" style="width:100%" :loading="loginLoading" @click="doRegister">
+                    注册并登录
+                </el-button>
+            </el-tab-pane>
+        </el-tabs>
+    </el-dialog>
+
+    <footer class="footer">
+        <span>星光影院 · 在线影院系统 © 2026</span>
+        <span>接口文档: <a href="/doc.html" target="_blank">/doc.html</a></span>
+    </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/element-plus@2.8.8/dist/index.full.min.js"></script>
+<script src="js/api.js"></script>
+<script>
+    const {createApp, ref, computed, onMounted} = Vue;
+
+    createApp({
+        setup() {
+            const movies = ref([]);
+            const loading = ref(false);
+            const keyword = ref('');
+            const dialogVisible = ref(false);
+            const currentMovie = ref(null);
+            const schedules = ref([]);
+            const schedulesLoading = ref(false);
+            const user = ref(API.getUser());
+            const loginVisible = ref(false);
+            const loginTab = ref('login');
+            const loginLoading = ref(false);
+            const loginForm = ref({username: '', password: ''});
+            const registerForm = ref({username: '', password: '', phone: ''});
+
+            const filteredMovies = computed(() => {
+                const k = keyword.value.trim().toLowerCase();
+                if (!k) {
+                    return movies.value;
+                }
+                return movies.value.filter(m =>
+                    (m.title || '').toLowerCase().includes(k) ||
+                    (m.director || '').toLowerCase().includes(k) ||
+                    (m.actors || '').toLowerCase().includes(k));
+            });
+
+            async function loadMovies() {
+                loading.value = true;
+                try {
+                    movies.value = await API.get('/api/movies/list');
+                } catch (e) {
+                    ElementPlus.ElMessage.error(e.message);
+                } finally {
+                    loading.value = false;
+                }
+            }
+
+            async function openSchedules(movie) {
+                currentMovie.value = movie;
+                dialogVisible.value = true;
+                schedules.value = [];
+                schedulesLoading.value = true;
+                try {
+                    schedules.value = await API.get('/api/schedules/movie/' + movie.id);
+                } catch (e) {
+                    ElementPlus.ElMessage.error(e.message);
+                } finally {
+                    schedulesLoading.value = false;
+                }
+            }
+
+            function goSeat(schedule) {
+                if (!user.value) {
+                    ElementPlus.ElMessage.warning('请先登录后再选座');
+                    loginVisible.value = true;
+                    return;
+                }
+                window.location.href = 'seat.html?scheduleId=' + schedule.id;
+            }
+
+            function goOrders() {
+                window.location.href = 'orders.html';
+            }
+
+            async function doLogin() {
+                if (!loginForm.value.username || !loginForm.value.password) {
+                    ElementPlus.ElMessage.warning('请输入用户名和密码');
+                    return;
+                }
+                loginLoading.value = true;
+                try {
+                    const data = await API.post('/api/auth/login', loginForm.value);
+                    API.setUser(data);
+                    user.value = data;
+                    loginVisible.value = false;
+                    ElementPlus.ElMessage.success('欢迎回来, ' + data.username);
+                } catch (e) {
+                    ElementPlus.ElMessage.error(e.message);
+                } finally {
+                    loginLoading.value = false;
+                }
+            }
+
+            async function doRegister() {
+                if (!registerForm.value.username || !registerForm.value.password) {
+                    ElementPlus.ElMessage.warning('请输入用户名和密码');
+                    return;
+                }
+                loginLoading.value = true;
+                try {
+                    await API.post('/api/auth/register', registerForm.value);
+                    const data = await API.post('/api/auth/login', {
+                        username: registerForm.value.username,
+                        password: registerForm.value.password
+                    });
+                    API.setUser(data);
+                    user.value = data;
+                    loginVisible.value = false;
+                    loginTab.value = 'login';
+                    ElementPlus.ElMessage.success('注册成功, 已自动登录');
+                } catch (e) {
+                    ElementPlus.ElMessage.error(e.message);
+                } finally {
+                    loginLoading.value = false;
+                }
+            }
+
+            function logout() {
+                API.logout();
+                user.value = null;
+                ElementPlus.ElMessage.success('已退出登录');
+            }
+
+            function onImgError(e) {
+                e.target.style.display = 'none';
+            }
+
+            function scrollToMovies() {
+                window.scrollTo({top: window.innerHeight * 0.5, behavior: 'smooth'});
+            }
+
+            onMounted(() => {
+                loadMovies();
+                const params = new URLSearchParams(location.search);
+                if (params.get('login') === '1') {
+                    loginVisible.value = true;
+                }
+            });
+
+            return {
+                movies, loading, keyword, dialogVisible, currentMovie, schedules, schedulesLoading,
+                user, loginVisible, loginTab, loginLoading, loginForm, registerForm, filteredMovies,
+                loadMovies, openSchedules, goSeat, doLogin, doRegister, logout, onImgError, scrollToMovies,
+                goOrders, rating: movieRating, money, shortTime, dayOf, clockOf
+            };
+        }
+    }).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

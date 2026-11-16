@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>选座购票 · 星光影院</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.8.8/dist/index.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.8.8/theme-chalk/dark/css-vars.css">
+    <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+<div id="app" v-cloak>
+    <header class="navbar">
+        <div class="brand">
+            <span class="logo">影</span>
+            <div>星光影院<small>CINEMA · X</small></div>
+        </div>
+        <nav class="nav-links">
+            <a href="index.html">首页</a>
+            <a href="seat.html" class="active">选座购票</a>
+            <a href="orders.html">我的订单</a>
+            <a href="admin.html">管理后台</a>
+        </nav>
+        <div class="nav-right">
+            <div class="user-chip" v-if="user">
+                <span class="avatar">{{ user.username.slice(0, 1).toUpperCase() }}</span>
+                <span>{{ user.username }}</span>
+            </div>
+            <el-button v-else type="primary" size="small" round @click="goLogin">登录</el-button>
+        </div>
+    </header>
+
+    <main class="page">
+        <div class="section-head">
+            <h2>在线选座</h2>
+            <span class="sub" v-if="schedule">{{ schedule.movieTitle }} · {{ schedule.hallName }}</span>
+            <div class="toolbar">
+                <el-button plain @click="goHome">← 返回首页</el-button>
+                <el-button plain :loading="loading" @click="loadData">刷新座位</el-button>
+            </div>
+        </div>
+
+        <div v-if="!scheduleId" class="panel empty-box">
+            <div class="big">🎟</div>
+            <div>未指定场次, 请先在首页选择影片与场次</div>
+            <div style="margin-top:18px">
+                <el-button type="primary" round @click="goHome">去挑一部电影</el-button>
+            </div>
+        </div>
+
+        <div v-else-if="loading" class="panel">
+            <el-skeleton :rows="8" animated></el-skeleton>
+        </div>
+
+        <div v-else-if="schedule" class="seat-layout">
+            <section class="panel">
+                <h3 class="panel-title">影厅座位图</h3>
+                <div class="screen-wrap">
+                    <div class="screen"></div>
+                    <div class="screen-label">S C R E E N</div>
+                </div>
+                <div class="seat-scroll">
+                    <div class="seat-grid"
+                         :style="{gridTemplateColumns: 'repeat(' + schedule.colCount + ', 26px)'}">
+                        <template v-for="row in schedule.rowCount" :key="row">
+                            <div v-for="col in schedule.colCount" :key="row + '-' + col"
+                                 class="seat"
+                                 :class="{selected: isSelected(row, col), occupied: isOccupied(row, col)}"
+                                 :title="seatLabel(row, col) + (isOccupied(row, col) ? ' (已售)' : '')"
+                                 @click="toggle(row, col)"></div>
+                        </template>
+                    </div>
+                </div>
+                <div class="legend">
+                    <span><i class="free"></i>可选</span>
+                    <span><i class="picked"></i>已选</span>
+                    <span><i class="sold"></i>已售 / 已锁定</span>
+                </div>
+            </section>
+
+            <aside class="panel">
+                <div class="movie-mini">
+                    <img :src="schedule.movieCover || defaultCover" alt="cover" @error="onImgError">
+                    <div>
+                        <h3>{{ schedule.movieTitle }}</h3>
+                        <p>{{ schedule.hallName }}</p>
+                        <p>{{ dayOf(schedule.startTime) }} {{ clockOf(schedule.startTime) }} 开场</p>
+                        <p>散场 {{ clockOf(schedule.endTime) }}</p>
+                    </div>
+                </div>
+
+                <div class="summary-row">
+                    <span>票面单价</span>
+                    <strong>{{ money(schedule.price) }}</strong>
+                </div>
+                <div class="summary-row">
+                    <span>已选座位</span>
+                    <strong>{{ selected.length }} 个</strong>
+                </div>
+
+                <div class="seat-tags">
+                    <el-tag v-for="s in selected" :key="s" closable effect="dark" type="success"
+                            @close="removeSeat(s)">{{ s }}</el-tag>
+                    <span v-if="selected.length === 0" style="font-size:12px;color:var(--text-dim)">
+                        点击左侧灰色座位开始选座
+                    </span>
+                </div>
+
+                <div class="total-bar">
+                    <span style="font-size:13px;color:var(--text-dim)">合计</span>
+                    <span class="amount">{{ money(totalPrice) }}</span>
+                </div>
+
+                <el-button type="primary" size="large" style="width:100%" round
+                           :loading="submitting" :disabled="selected.length === 0"
+                           @click="confirmOrder">
+                    确认购票
+                </el-button>
+                <p class="form-tip" style="margin-top:14px">
+                    下单后座位即被锁定, 请在 15 分钟内完成支付; 同一场次座位已做并发锁座校验, 不会重复售出。
+                </p>
+            </aside>
+        </div>
+
+        <div v-else class="panel empty-box">
+            <div class="big">😢</div>
+            <div>场次不存在或已下架</div>
+            <div style="margin-top:18px"><el-button plain @click="goHome">返回首页</el-button></div>
+        </div>
+    </main>
+
+    <!-- 下单成功 -->
+    <el-dialog v-model="successVisible" width="420px" title="购票成功" :close-on-click-modal="false">
+        <div v-if="order" style="text-align:center;padding: 6px 0 10px">
+            <div style="font-size:40px">✅</div>
+            <p style="color:var(--text-dim);font-size:13px;margin:10px 0 22px">座位已锁定, 请及时支付</p>
+            <div class="summary-row"><span>订单号</span><strong>{{ order.orderNo }}</strong></div>
+            <div class="summary-row"><span>取票码</span><strong class="ticket-code">{{ ticketCode(order.orderNo) }}</strong></div>
+            <div class="summary-row"><span>座位</span><strong>{{ order.seats }}</strong></div>
+            <div class="summary-row"><span>金额</span><strong style="color:var(--accent-2)">{{ money(order.totalPrice) }}</strong></div>
+        </div>
+        <template #footer>
+            <el-button plain @click="goHome">返回首页</el-button>
+            <el-button type="primary" @click="goOrders">查看我的订单</el-button>
+        </template>
+    </el-dialog>
+
+    <footer class="footer">
+        <span>星光影院 · 在线影院系统 © 2026</span>
+        <span>选座数据实时来自后端 /api/orders/occupied</span>
+    </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/element-plus@2.8.8/dist/index.full.min.js"></script>
+<script src="js/api.js"></script>
+<script>
+    const {createApp, ref, computed, onMounted} = Vue;
+    const params = new URLSearchParams(location.search);
+    const scheduleId = Number(params.get('scheduleId') || 0);
+
+    createApp({
+        setup() {
+            const user = ref(API.getUser());
+            const schedule = ref(null);
+            const occupied = ref([]);
+            const selected = ref([]);
+            const loading = ref(false);
+            const submitting = ref(false);
+            const successVisible = ref(false);
+            const order = ref(null);
+            const defaultCover = 'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=cinema%20movie%20poster%20minimal%20dark&image_size=portrait_4_3';
+
+            const totalPrice = computed(() =>
+                Number(schedule.value ? schedule.value.price : 0) * selected.value.length);
+
+            function seatLabel(row, col) {
+                return row + '排' + col + '座';
+            }
+
+            function isOccupied(row, col) {
+                return occupied.value.includes(seatLabel(row, col));
+            }
+
+            function isSelected(row, col) {
+                return selected.value.includes(seatLabel(row, col));
+            }
+
+            function toggle(row, col) {
+                const label = seatLabel(row, col);
+                if (isOccupied(row, col)) {
+                    ElementPlus.ElMessage.warning(label + ' 已被购买');
+                    return;
+                }
+                const idx = selected.value.indexOf(label);
+                if (idx >= 0) {
+                    selected.value.splice(idx, 1);
+                } else {
+                    if (selected.value.length >= 6) {
+                        ElementPlus.ElMessage.warning('单次最多选择 6 个座位');
+                        return;
+                    }
+                    selected.value.push(label);
+                }
+            }
+
+            function removeSeat(seat) {
+                selected.value = selected.value.filter(s => s !== seat);
+            }
+
+            async function loadData() {
+                if (!scheduleId) {
+                    return;
+                }
+                loading.value = true;
+                try {
+                    schedule.value = await API.get('/api/schedules/' + scheduleId);
+                    occupied.value = await API.get('/api/orders/occupied?scheduleId=' + scheduleId);
+                    const stillValid = selected.value.filter(s => !occupied.value.includes(s));
+                    selected.value = stillValid;
+                } catch (e) {
+                    schedule.value = null;
+                    ElementPlus.ElMessage.error(e.message);
+                } finally {
+                    loading.value = false;
+                }
+            }
+
+            async function confirmOrder() {
+                if (!user.value) {
+                    ElementPlus.ElMessage.warning('请先登录');
+                    goLogin();
+                    return;
+                }
+                if (selected.value.length === 0) {
+                    ElementPlus.ElMessage.warning('请先选择座位');
+                    return;
+                }
+                submitting.value = true;
+                try {
+                    order.value = await API.post('/api/orders', {
+                        userId: user.value.id,
+                        scheduleId: scheduleId,
+                        seats: selected.value
+                    });
+                    successVisible.value = true;
+                    selected.value = [];
+                    await loadData();
+                } catch (e) {
+                    ElementPlus.ElMessage.error(e.message);
+                    await loadData();
+                } finally {
+                    submitting.value = false;
+                }
+            }
+
+            function goHome() {
+                window.location.href = 'index.html';
+            }
+
+            function goOrders() {
+                window.location.href = 'orders.html';
+            }
+
+            function goLogin() {
+                window.location.href = 'index.html?login=1&redirect=' + encodeURIComponent('seat.html?scheduleId=' + scheduleId);
+            }
+
+            function onImgError(e) {
+                e.target.style.display = 'none';
+            }
+
+            onMounted(() => {
+                if (!user.value) {
+                    goLogin();
+                    return;
+                }
+                loadData();
+            });
+
+            return {
+                user, schedule, occupied, selected, loading, submitting, successVisible, order, defaultCover,
+                totalPrice, seatLabel, isOccupied, isSelected, toggle, removeSeat, loadData, confirmOrder,
+                goHome, goOrders, goLogin, onImgError, money, dayOf, clockOf, ticketCode,
+                scheduleId
+            };
+        }
+    }).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

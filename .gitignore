@@ -1,0 +1,10 @@
+# --- 标准忽略项（自动生成/补齐）---
+/target/
+/.idea/
+*.class
+*.jar
+*.log
+**/target/
+**/node_modules/
+.DS_Store
+*.iml

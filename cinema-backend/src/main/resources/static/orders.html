@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>我的订单 · 星光影院</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.8.8/dist/index.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.8.8/theme-chalk/dark/css-vars.css">
+    <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+<div id="app" v-cloak>
+    <header class="navbar">
+        <div class="brand">
+            <span class="logo">影</span>
+            <div>星光影院<small>CINEMA · X</small></div>
+        </div>
+        <nav class="nav-links">
+            <a href="index.html">首页</a>
+            <a href="orders.html" class="active">我的订单</a>
+            <a href="admin.html">管理后台</a>
+        </nav>
+        <div class="nav-right">
+            <div class="user-chip" v-if="user">
+                <span class="avatar">{{ user.username.slice(0, 1).toUpperCase() }}</span>
+                <span>{{ user.username }}</span>
+                <el-tag size="small" :type="user.role === 1 ? 'danger' : 'info'" effect="dark">
+                    {{ user.role === 1 ? '管理员' : '会员' }}
+                </el-tag>
+            </div>
+            <el-button v-else type="primary" size="small" round @click="goLogin">登录</el-button>
+        </div>
+    </header>
+
+    <main class="page">
+        <div class="section-head">
+            <h2>个人中心 · 我的订单</h2>
+            <span class="sub">购票记录、座位号、取票码与支付状态</span>
+            <div class="toolbar">
+                <el-button plain :loading="loading" @click="loadOrders">刷新</el-button>
+                <el-button type="primary" plain round @click="goHome">继续购票</el-button>
+            </div>
+        </div>
+
+        <div class="stat-grid">
+            <div class="stat-card">
+                <div class="label">全部订单</div>
+                <div class="value">{{ stats.total }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">待支付</div>
+                <div class="value" style="color:var(--accent-2)">{{ stats.unpaid }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">已支付</div>
+                <div class="value" style="color:#38d39f">{{ stats.paid }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">累计消费</div>
+                <div class="value">{{ money(stats.spent) }}</div>
+            </div>
+        </div>
+
+        <section class="panel">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+                <el-radio-group v-model="filter" size="small">
+                    <el-radio-button label="all">全部</el-radio-button>
+                    <el-radio-button label="0">未支付</el-radio-button>
+                    <el-radio-button label="1">已支付</el-radio-button>
+                    <el-radio-button label="2">已取消</el-radio-button>
+                </el-radio-group>
+                <span style="font-size:12px;color:var(--text-dim)">共 {{ filtered.length }} 条记录</span>
+            </div>
+
+            <el-skeleton v-if="loading" :rows="6" animated></el-skeleton>
+
+            <div v-else-if="filtered.length === 0" class="empty-box">
+                <div class="big">🍿</div>
+                <div>还没有相关订单, 去挑一部电影吧</div>
+                <div style="margin-top:18px"><el-button type="primary" round @click="goHome">去选座</el-button></div>
+            </div>
+
+            <el-table v-else :data="filtered" style="width:100%">
+                <el-table-column label="影片" min-width="150">
+                    <template #default="{ row }">
+                        <div style="display:flex;align-items:center;gap:10px">
+                            <img :src="row.coverUrl" alt="" @error="onImgError"
+                                 style="width:38px;height:52px;border-radius:6px;object-fit:cover;background:#0e1118">
+                            <span>{{ row.movieTitle || '-' }}</span>
+                        </div>
+                    </template>
+                </el-table-column>
+                <el-table-column label="场次" min-width="140">
+                    <template #default="{ row }">
+                        <div>{{ dayOf(row.startTime) }}</div>
+                        <div style="font-size:12px;color:var(--text-dim)">{{ clockOf(row.startTime) }} 开场</div>
+                    </template>
+                </el-table-column>
+                <el-table-column prop="hallName" label="影厅" min-width="110"></el-table-column>
+                <el-table-column prop="seats" label="座位号" min-width="150"></el-table-column>
+                <el-table-column label="取票码" min-width="120">
+                    <template #default="{ row }">
+                        <span class="ticket-code">{{ ticketCode(row.orderNo) }}</span>
+                    </template>
+                </el-table-column>
+                <el-table-column label="金额" width="100">
+                    <template #default="{ row }">
+                        <span style="color:var(--accent-2);font-weight:600">{{ money(row.totalPrice) }}</span>
+                    </template>
+                </el-table-column>
+                <el-table-column label="状态" width="100">
+                    <template #default="{ row }">
+                        <el-tag :type="statusType(row.status)" effect="dark" size="small">
+                            {{ statusText(row.status) }}
+                        </el-tag>
+                    </template>
+                </el-table-column>
+                <el-table-column label="下单时间" min-width="150">
+                    <template #default="{ row }">
+                        <span style="font-size:12px;color:var(--text-dim)">{{ row.createTime }}</span>
+                    </template>
+                </el-table-column>
+                <el-table-column label="操作" width="150" fixed="right">
+                    <template #default="{ row }">
+                        <template v-if="row.status === 0">
+                            <el-button size="small" type="primary" link @click="pay(row)">支付</el-button>
+                            <el-button size="small" type="danger" link @click="cancel(row)">取消</el-button>
+                        </template>
+                        <span v-else style="font-size:12px;color:var(--text-dim)">—</span>
+                    </template>
+                </el-table-column>
+            </el-table>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <span>星光影院 · 在线影院系统 © 2026</span>
+        <span>订单数据来自 /api/orders/user/{userId}</span>
+    </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/element-plus@2.8.8/dist/index.full.min.js"></script>
+<script src="js/api.js"></script>
+<script>
+    const {createApp, ref, computed, onMounted} = Vue;
+
+    createApp({
+        setup() {
+            const user = ref(API.getUser());
+            const orders = ref([]);
+            const loading = ref(false);
+            const filter = ref('all');
+
+            const filtered = computed(() => {
+                if (filter.value === 'all') {
+                    return orders.value;
+                }
+                return orders.value.filter(o => String(o.status) === filter.value);
+            });
+
+            const stats = computed(() => {
+                const list = orders.value;
+                return {
+                    total: list.length,
+                    unpaid: list.filter(o => o.status === 0).length,
+                    paid: list.filter(o => o.status === 1).length,
+                    spent: list.filter(o => o.status === 1)
+                        .reduce((sum, o) => sum + Number(o.totalPrice || 0), 0)
+                };
+            });
+
+            async function loadOrders() {
+                if (!user.value) {
+                    return;
+                }
+                loading.value = true;
+                try {
+                    orders.value = await API.get('/api/orders/user/' + user.value.id);
+                } catch (e) {
+                    ElementPlus.ElMessage.error(e.message);
+                } finally {
+                    loading.value = false;
+                }
+            }
+
+            async function pay(row) {
+                try {
+                    await ElementPlus.ElMessageBox.confirm(
+                        '确认支付 ' + money(row.totalPrice) + ' 完成购票?', '模拟支付',
+                        {confirmButtonText: '确认支付', cancelButtonText: '再想想', type: 'warning'});
+                    await API.put('/api/orders/' + row.id + '/pay');
+                    ElementPlus.ElMessage.success('支付成功, 取票码 ' + ticketCode(row.orderNo));
+                    await loadOrders();
+                } catch (e) {
+                    if (e !== 'cancel' && e !== 'close') {
+                        ElementPlus.ElMessage.error(e.message || '支付失败');
+                    }
+                }
+            }
+
+            async function cancel(row) {
+                try {
+                    await ElementPlus.ElMessageBox.confirm(
+                        '取消后将释放座位 ' + row.seats + ', 是否继续?', '取消订单',
+                        {confirmButtonText: '确认取消', cancelButtonText: '返回', type: 'warning'});
+                    await API.put('/api/orders/' + row.id + '/cancel');
+                    ElementPlus.ElMessage.success('订单已取消, 座位已释放');
+                    await loadOrders();
+                } catch (e) {
+                    if (e !== 'cancel' && e !== 'close') {
+                        ElementPlus.ElMessage.error(e.message || '取消失败');
+                    }
+                }
+            }
+
+            function goHome() {
+                window.location.href = 'index.html';
+            }
+
+            function goLogin() {
+                window.location.href = 'index.html?login=1&redirect=orders.html';
+            }
+
+            function onImgError(e) {
+                e.target.style.display = 'none';
+            }
+
+            onMounted(() => {
+                if (!user.value) {
+                    goLogin();
+                    return;
+                }
+                loadOrders();
+            });
+
+            return {
+                user, orders, loading, filter, filtered, stats,
+                loadOrders, pay, cancel, goHome, goLogin, onImgError,
+                money, dayOf, clockOf, ticketCode, statusText, statusType
+            };
+        }
+    }).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>

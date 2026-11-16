@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>后台管理 · 星光影院</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.8.8/dist/index.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/element-plus@2.8.8/theme-chalk/dark/css-vars.css">
+    <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+<div id="app" v-cloak>
+    <header class="navbar">
+        <div class="brand">
+            <span class="logo">影</span>
+            <div>星光影院<small>CINEMA · X</small></div>
+        </div>
+        <nav class="nav-links">
+            <a href="index.html">首页</a>
+            <a href="orders.html">我的订单</a>
+            <a href="admin.html" class="active">管理后台</a>
+        </nav>
+        <div class="nav-right">
+            <div class="user-chip" v-if="user">
+                <span class="avatar">{{ user.username.slice(0, 1).toUpperCase() }}</span>
+                <span>{{ user.username }}</span>
+                <el-tag size="small" type="danger" effect="dark">管理员</el-tag>
+            </div>
+            <el-button v-if="user" size="small" plain @click="logout">退出</el-button>
+        </div>
+    </header>
+
+    <main class="page">
+        <!-- 未登录 / 非管理员 -->
+        <div v-if="!isAdmin" class="login-wrap">
+            <div class="login-card">
+                <h2>后台管理登录</h2>
+                <p>请使用管理员账号登录后维护影片与排片</p>
+                <el-form label-position="top" @submit.prevent>
+                    <el-form-item label="用户名">
+                        <el-input v-model="loginForm.username" size="large" placeholder="admin"></el-input>
+                    </el-form-item>
+                    <el-form-item label="密码">
+                        <el-input v-model="loginForm.password" type="password" show-password size="large"
+                                  placeholder="123456" @keyup.enter="doLogin"></el-input>
+                    </el-form-item>
+                </el-form>
+                <el-button type="primary" size="large" style="width:100%" :loading="loginLoading"
+                           @click="doLogin">登录</el-button>
+                <p class="form-tip" style="margin-top:14px">默认管理员: admin / 123456</p>
+            </div>
+        </div>
+
+        <template v-else>
+            <div class="section-head">
+                <h2>后台管理面板</h2>
+                <span class="sub">影片发布 · 排片维护</span>
+            </div>
+
+            <el-tabs v-model="activeTab" class="admin-tabs">
+
+                <!-- 电影管理 -->
+                <el-tab-pane label="电影管理" name="movie">
+                    <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center">
+                        <el-button type="primary" round @click="openMovieDialog()">+ 新增电影</el-button>
+                        <el-button plain :loading="movieLoading" @click="loadMovies">刷新</el-button>
+                        <span class="form-tip">共 {{ movieTotal }} 部影片</span>
+                    </div>
+
+                    <el-table :data="movies" v-loading="movieLoading" style="width:100%">
+                        <el-table-column label="封面" width="86">
+                            <template #default="{ row }">
+                                <img :src="row.coverUrl" alt="" @error="onImgError"
+                                     style="width:48px;height:66px;border-radius:6px;object-fit:cover;background:#0e1118">
+                            </template>
+                        </el-table-column>
+                        <el-table-column prop="title" label="片名" min-width="130"></el-table-column>
+                        <el-table-column prop="director" label="导演" min-width="110"></el-table-column>
+                        <el-table-column prop="actors" label="主演" min-width="180" show-overflow-tooltip></el-table-column>
+                        <el-table-column prop="duration" label="时长" width="90">
+                            <template #default="{ row }">{{ row.duration }} 分钟</template>
+                        </el-table-column>
+                        <el-table-column label="票价" width="100">
+                            <template #default="{ row }">
+                                <span style="color:var(--accent-2)">{{ money(row.price) }}</span>
+                            </template>
+                        </el-table-column>
+                        <el-table-column prop="releaseDate" label="上映日期" width="120"></el-table-column>
+                        <el-table-column label="操作" width="140" fixed="right">
+                            <template #default="{ row }">
+                                <el-button size="small" type="primary" link @click="openMovieDialog(row)">编辑</el-button>
+                                <el-button size="small" type="danger" link @click="removeMovie(row)">删除</el-button>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+
+                    <div style="display:flex;justify-content:flex-end;margin-top:16px">
+                        <el-pagination background layout="prev, pager, next" :total="movieTotal"
+                                       :page-size="moviePage.pageSize" :current-page="moviePage.pageNum"
+                                       @current-change="onMoviePageChange"></el-pagination>
+                    </div>
+                </el-tab-pane>
+
+                <!-- 排片管理 -->
+                <el-tab-pane label="排片管理" name="schedule">
+                    <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
+                        <el-button type="primary" round @click="openScheduleDialog">+ 新增排片</el-button>
+                        <el-button plain :loading="scheduleLoading" @click="loadSchedules">刷新</el-button>
+                        <el-select v-model="filterMovieId" placeholder="按影片筛选" clearable size="default"
+                                   style="width:200px" @change="onFilterMovie">
+                            <el-option v-for="m in allMovies" :key="m.id" :label="m.title" :value="m.id"></el-option>
+                        </el-select>
+                        <span class="form-tip">共 {{ scheduleTotal }} 条排片</span>
+                    </div>
+
+                    <el-table :data="schedules" v-loading="scheduleLoading" style="width:100%">
+                        <el-table-column prop="movieTitle" label="影片" min-width="150"></el-table-column>
+                        <el-table-column prop="hallName" label="影厅" min-width="120"></el-table-column>
+                        <el-table-column label="开场时间" min-width="160">
+                            <template #default="{ row }">{{ row.startTime }}</template>
+                        </el-table-column>
+                        <el-table-column label="散场时间" min-width="160">
+                            <template #default="{ row }">{{ row.endTime }}</template>
+                        </el-table-column>
+                        <el-table-column label="票价" width="100">
+                            <template #default="{ row }">
+                                <span style="color:var(--accent-2)">{{ money(row.price) }}</span>
+                            </template>
+                        </el-table-column>
+                        <el-table-column label="操作" width="120" fixed="right">
+                            <template #default="{ row }">
+                                <el-button size="small" type="danger" link @click="removeSchedule(row)">删除</el-button>
+                            </template>
+                        </el-table-column>
+                    </el-table>
+
+                    <div style="display:flex;justify-content:flex-end;margin-top:16px">
+                        <el-pagination background layout="prev, pager, next" :total="scheduleTotal"
+                                       :page-size="schedulePage.pageSize" :current-page="schedulePage.pageNum"
+                                       @current-change="onSchedulePageChange"></el-pagination>
+                    </div>
+                </el-tab-pane>
+            </el-tabs>
+        </template>
+    </main>
+
+    <!-- 电影表单 -->
+    <el-dialog v-model="movieDialog" :title="movieForm.id ? '编辑电影' : '新增电影'" width="620px">
+        <el-form label-width="90px">
+            <el-form-item label="片名" required>
+                <el-input v-model="movieForm.title" placeholder="如: 流浪地球3"></el-input>
+            </el-form-item>
+            <el-form-item label="导演">
+                <el-input v-model="movieForm.director" placeholder="导演姓名"></el-input>
+            </el-form-item>
+            <el-form-item label="主演">
+                <el-input v-model="movieForm.actors" placeholder="多个演员用英文逗号分隔"></el-input>
+            </el-form-item>
+            <el-form-item label="时长(分钟)" required>
+                <el-input-number v-model="movieForm.duration" :min="1" :max="600" style="width:100%"></el-input-number>
+            </el-form-item>
+            <el-form-item label="票价(元)">
+                <el-input-number v-model="movieForm.price" :min="0" :precision="2" :step="1" style="width:100%"></el-input-number>
+            </el-form-item>
+            <el-form-item label="上映日期">
+                <el-date-picker v-model="movieForm.releaseDate" type="date" value-format="YYYY-MM-DD"
+                                placeholder="选择日期" style="width:100%"></el-date-picker>
+            </el-form-item>
+            <el-form-item label="封面地址">
+                <el-input v-model="movieForm.coverUrl" placeholder="http(s):// 图片地址"></el-input>
+            </el-form-item>
+            <el-form-item label="剧情简介">
+                <el-input v-model="movieForm.description" type="textarea" :rows="4"></el-input>
+            </el-form-item>
+        </el-form>
+        <template #footer>
+            <el-button plain @click="movieDialog = false">取消</el-button>
+            <el-button type="primary" :loading="movieSaving" @click="saveMovie">保存</el-button>
+        </template>
+    </el-dialog>
+
+    <!-- 排片表单 -->
+    <el-dialog v-model="scheduleDialog" title="新增排片" width="560px">
+        <el-form label-width="90px">
+            <el-form-item label="选择影片" required>
+                <el-select v-model="scheduleForm.movieId" placeholder="请选择影片" style="width:100%"
+                           @change="onScheduleMovieChange">
+                    <el-option v-for="m in allMovies" :key="m.id" :label="m.title + ' (' + m.duration + '分钟)'"
+                               :value="m.id"></el-option>
+                </el-select>
+            </el-form-item>
+            <el-form-item label="选择影厅" required>
+                <el-select v-model="scheduleForm.hallId" placeholder="请选择影厅" style="width:100%">
+                    <el-option v-for="h in halls" :key="h.id"
+                               :label="h.name + ' (' + h.rowCount + '排' + h.colCount + '列)'" :value="h.id"></el-option>
+                </el-select>
+            </el-form-item>
+            <el-form-item label="开场时间" required>
+                <el-date-picker v-model="scheduleForm.startTime" type="datetime" value-format="YYYY-MM-DD HH:mm:ss"
+                                placeholder="选择开场时间" style="width:100%"></el-date-picker>
+            </el-form-item>
+            <el-form-item label="票价(元)">
+                <el-input-number v-model="scheduleForm.price" :min="0" :precision="2" :step="1"
+                                 style="width:100%"></el-input-number>
+            </el-form-item>
+            <el-form-item label="散场时间">
+                <span class="form-tip">留空由后端按影片时长自动计算{{ computedEndHint }}</span>
+            </el-form-item>
+        </el-form>
+        <template #footer>
+            <el-button plain @click="scheduleDialog = false">取消</el-button>
+            <el-button type="primary" :loading="scheduleSaving" @click="saveSchedule">发布排片</el-button>
+        </template>
+    </el-dialog>
+
+    <footer class="footer">
+        <span>星光影院 · 后台管理 © 2026</span>
+        <span>接口: /api/movies · /api/schedules · /api/halls/list</span>
+    </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/element-plus@2.8.8/dist/index.full.min.js"></script>
+<script src="js/api.js"></script>
+<script>
+    const {createApp, ref, computed, onMounted} = Vue;
+
+    createApp({
+        setup() {
+            const user = ref(API.getUser());
+            const isAdmin = computed(() => !!user.value && user.value.role === 1);
+            const activeTab = ref('movie');
+
+            const loginForm = ref({username: 'admin', password: ''});
+            const loginLoading = ref(false);
+
+            const movies = ref([]);
+            const allMovies = ref([]);
+            const halls = ref([]);
+            const movieTotal = ref(0);
+            const movieLoading = ref(false);
+            const moviePage = ref({pageNum: 1, pageSize: 8});
+            const movieDialog = ref(false);
+            const movieSaving = ref(false);
+            const movieForm = ref(emptyMovie());
+
+            const schedules = ref([]);
+            const scheduleTotal = ref(0);
+            const scheduleLoading = ref(false);
+            const schedulePage = ref({pageNum: 1, pageSize: 8});
+            const filterMovieId = ref(null);
+            const scheduleDialog = ref(false);
+            const scheduleSaving = ref(false);
+            const scheduleForm = ref(emptySchedule());
+
+            const computedEndHint = computed(() => {
+                const movie = allMovies.value.find(m => m.id === scheduleForm.value.movieId);
+                if (!movie || !scheduleForm.value.startTime) {
+                    return '';
+                }
+                const start = new Date(scheduleForm.value.startTime.replace(/-/g, '/'));
+                const end = new Date(start.getTime() + Number(movie.duration) * 60000);
+                const pad = n => String(n).padStart(2, '0');
+                return ', 预计散场 ' + end.getFullYear() + '-' + pad(end.getMonth() + 1) + '-' + pad(end.getDate())
+                    + ' ' + pad(end.getHours()) + ':' + pad(end.getMinutes());
+            });
+
+            function emptyMovie() {
+                return {
+                    id: null, title: '', director: '', actors: '', duration: 120,
+                    coverUrl: '', description: '', price: 40, releaseDate: ''
+                };
+            }
+
+            function emptySchedule() {
+                return {movieId: null, hallId: null, startTime: '', price: 40};
+            }
+
+            async function doLogin() {
+                if (!loginForm.value.username || !loginForm.value.password) {
+                    ElementPlus.ElMessage.warning('请输入管理员账号和密码');
+                    return;
+                }
+                loginLoading.value = true;
+                try {
+                    const data = await API.post('/api/auth/login', loginForm.value);
+                    if (data.role !== 1) {
+                        ElementPlus.ElMessage.error('该账号不是管理员, 无权进入后台');
+                        return;
+                    }
+                    API.setUser(data);
+                    user.value = data;
+                    ElementPlus.ElMessage.success('管理员登录成功');
+                    await loadAll();
+                } catch (e) {
+                    ElementPlus.ElMessage.error(e.message);
+                } finally {
+                    loginLoading.value = false;
+                }
+            }
+
+            function logout() {
+                API.logout();
+                user.value = null;
+            }
+
+            async function loadAll() {
+                await Promise.all([loadMovies(), loadAllMovies(), loadHalls()]);
+                await loadSchedules();
+            }
+
+            async function loadMovies() {
+                movieLoading.value = true;
+                try {
+                    const page = await API.get('/api/movies/page?pageNum=' + moviePage.value.pageNum
+                        + '&pageSize=' + moviePage.value.pageSize);
+                    movies.value = page.records;
+                    movieTotal.value = page.total;
+                } catch (e) {
+                    ElementPlus.ElMessage.error(e.message);
+                } finally {
+                    movieLoading.value = false;
+                }
+            }
+
+            async function loadAllMovies() {
+                try {
+                    allMovies.value = await API.get('/api/movies/list');
+                } catch (e) {
+                    ElementPlus.ElMessage.error(e.message);
+                }
+            }
+
+            async function loadHalls() {
+                try {
+                    halls.value = await API.get('/api/halls/list');
+                } catch (e) {
+                    ElementPlus.ElMessage.error(e.message);
+                }
+            }
+
+            async function loadSchedules() {
+                scheduleLoading.value = true;
+                try {
+                    let url = '/api/schedules/page?pageNum=' + schedulePage.value.pageNum
+                        + '&pageSize=' + schedulePage.value.pageSize;
+                    if (filterMovieId.value) {
+                        url += '&movieId=' + filterMovieId.value;
+                    }
+                    const page = await API.get(url);
+                    schedules.value = page.records;
+                    scheduleTotal.value = page.total;
+                } catch (e) {
+                    ElementPlus.ElMessage.error(e.message);
+                } finally {
+                    scheduleLoading.value = false;
+                }
+            }
+
+            function onMoviePageChange(p) {
+                moviePage.value.pageNum = p;
+                loadMovies();
+            }
+
+            function onSchedulePageChange(p) {
+                schedulePage.value.pageNum = p;
+                loadSchedules();
+            }
+
+            function onFilterMovie() {
+                schedulePage.value.pageNum = 1;
+                loadSchedules();
+            }
+
+            function openMovieDialog(row) {
+                movieForm.value = row ? Object.assign(emptyMovie(), row) : emptyMovie();
+                movieDialog.value = true;
+            }
+
+            async function saveMovie() {
+                if (!movieForm.value.title || !movieForm.value.duration) {
+                    ElementPlus.ElMessage.warning('片名与时长必填');
+                    return;
+                }
+                movieSaving.value = true;
+                try {
+                    const body = Object.assign({}, movieForm.value);
+                    if (body.id) {
+                        await API.put('/api/movies/' + body.id, body);
+                        ElementPlus.ElMessage.success('影片已更新');
+                    } else {
+                        delete body.id;
+                        await API.post('/api/movies', body);
+                        ElementPlus.ElMessage.success('影片发布成功');
+                    }
+                    movieDialog.value = false;
+                    await loadMovies();
+                    await loadAllMovies();
+                } catch (e) {
+                    ElementPlus.ElMessage.error(e.message);
+                } finally {
+                    movieSaving.value = false;
+                }
+            }
+
+            async function removeMovie(row) {
+                try {
+                    await ElementPlus.ElMessageBox.confirm(
+                        '确认删除影片《' + row.title + '》?', '删除影片',
+                        {confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning'});
+                    await API.del('/api/movies/' + row.id);
+                    ElementPlus.ElMessage.success('已删除');
+                    await loadMovies();
+                    await loadAllMovies();
+                } catch (e) {
+                    if (e !== 'cancel' && e !== 'close') {
+                        ElementPlus.ElMessage.error(e.message || '删除失败');
+                    }
+                }
+            }
+
+            function openScheduleDialog() {
+                scheduleForm.value = emptySchedule();
+                const first = allMovies.value[0];
+                if (first) {
+                    scheduleForm.value.movieId = first.id;
+                    scheduleForm.value.price = first.price;
+                }
+                scheduleDialog.value = true;
+            }
+
+            function onScheduleMovieChange(id) {
+                const movie = allMovies.value.find(m => m.id === id);
+                if (movie) {
+                    scheduleForm.value.price = movie.price;
+                }
+            }
+
+            async function saveSchedule() {
+                const f = scheduleForm.value;
+                if (!f.movieId || !f.hallId || !f.startTime) {
+                    ElementPlus.ElMessage.warning('影片、影厅、开场时间必填');
+                    return;
+                }
+                scheduleSaving.value = true;
+                try {
+                    await API.post('/api/schedules', {
+                        movieId: f.movieId,
+                        hallId: f.hallId,
+                        startTime: f.startTime,
+                        price: f.price
+                    });
+                    ElementPlus.ElMessage.success('排片发布成功');
+                    scheduleDialog.value = false;
+                    schedulePage.value.pageNum = 1;
+                    await loadSchedules();
+                } catch (e) {
+                    ElementPlus.ElMessage.error(e.message);
+                } finally {
+                    scheduleSaving.value = false;
+                }
+            }
+
+            async function removeSchedule(row) {
+                try {
+                    await ElementPlus.ElMessageBox.confirm(
+                        '确认删除该场次? 已售票订单不受影响。', '删除排片',
+                        {confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning'});
+                    await API.del('/api/schedules/' + row.id);
+                    ElementPlus.ElMessage.success('已删除');
+                    await loadSchedules();
+                } catch (e) {
+                    if (e !== 'cancel' && e !== 'close') {
+                        ElementPlus.ElMessage.error(e.message || '删除失败');
+                    }
+                }
+            }
+
+            function onImgError(e) {
+                e.target.style.display = 'none';
+            }
+
+            onMounted(() => {
+                if (isAdmin.value) {
+                    loadAll();
+                }
+            });
+
+            return {
+                user, isAdmin, activeTab, loginForm, loginLoading, doLogin, logout,
+                movies, allMovies, halls, movieTotal, movieLoading, moviePage, movieDialog, movieSaving, movieForm,
+                schedules, scheduleTotal, scheduleLoading, schedulePage, filterMovieId, scheduleDialog, scheduleSaving,
+                scheduleForm, computedEndHint,
+                loadMovies, loadSchedules, onMoviePageChange, onSchedulePageChange, onFilterMovie,
+                openMovieDialog, saveMovie, removeMovie, openScheduleDialog, onScheduleMovieChange, saveSchedule,
+                removeSchedule, onImgError, money
+            };
+        }
+    }).use(ElementPlus).mount('#app');
+</script>
+</body>
+</html>
